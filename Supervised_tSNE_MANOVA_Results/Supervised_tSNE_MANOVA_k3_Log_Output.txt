@@ -1,0 +1,14 @@
+Processed Gene Count (NA removed) = 17278 
+Filtered Gene Count = 2000 
+Sample Count = 594  Features Count = 2000 
+Optimal Cluster Number k* = 3 
+
+========================================================
+          Clustering Internal Quality Metrics (in X_pca space)
+========================================================
+Davies–Bouldin Index (DBI, ↓): 1.491 
+Calinski–Harabasz Index (CH, ↑): 135.585 
+Mean Silhouette (↑): 0.244 
+File saved: example_cluster1.xlsx 
+File saved: example_cluster2.xlsx 
+File saved: example_cluster3.xlsx 

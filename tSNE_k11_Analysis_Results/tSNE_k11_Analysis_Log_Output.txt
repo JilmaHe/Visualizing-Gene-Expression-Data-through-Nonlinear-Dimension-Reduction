@@ -1,0 +1,41 @@
+Initial Matrix Dimension: 2000 594 
+Original Gene Count = 2000 
+Filtered Gene Count = 2000  (Top 2000 Highest Variance)
+File saved: example_cluster1.xlsx 
+File saved: example_cluster2.xlsx 
+File saved: example_cluster3.xlsx 
+File saved: example_cluster4.xlsx 
+File saved: example_cluster5.xlsx 
+File saved: example_cluster6.xlsx 
+File saved: example_cluster7.xlsx 
+File saved: example_cluster8.xlsx 
+File saved: example_cluster9.xlsx 
+File saved: example_cluster10.xlsx 
+File saved: example_cluster11.xlsx 
+
+Top 10 DE genes for Cluster1 - (Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster2 - (Cluster1+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster3 - (Cluster1+Cluster2+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster4 - (Cluster1+Cluster2+Cluster3+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster5 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster6 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster7+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster7 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster8+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster8 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster9+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster9 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster10+Cluster11)/10 :
+
+Top 10 DE genes for Cluster10 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster11)/10 :
+
+Top 10 DE genes for Cluster11 - (Cluster1+Cluster2+Cluster3+Cluster4+Cluster5+Cluster6+Cluster7+Cluster8+Cluster9+Cluster10)/10 :
+
+Differential analysis complete. Genes analyzed = 2000 , Clusters = 11 
+Mean Silhouette Coefficient: 0.056 
+Davies–Bouldin Index (DBI): 3.534 
+Calinski–Harabasz Index (CH): 29.033 

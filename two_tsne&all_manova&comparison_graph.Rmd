@@ -1,0 +1,1486 @@
+---
+title: "tsne_better"
+output: html_document
+date: "2025-11-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##tsne
+
+```{r cars}
+# ======================== Data Reading ============================
+library(readxl)
+library(dplyr)
+library(openxlsx)
+library(Rtsne)
+library(ggplot2)
+library(gridExtra)
+library(limma)
+library(cluster)
+library(factoextra)
+library(clusterSim)
+
+A0 <- read.table("C:/Users/Jilma/Desktop/TCGA.BRCA.sampleMap_AgilentG4502A_07_3", header = TRUE)
+
+# Check and install BiocManager (if not installed)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+# BiocManager::install("limma") # Only needed for the first run
+
+rownames(A0) <- A0[, 1]
+
+# ======================== Data Cleaning and Type Conversion ============================
+A <- na.omit(A0)
+A <- A[, -1:-4]
+
+# Convert data to numeric matrix
+A <- apply(A, 2, as.numeric)
+rownames(A) <- na.omit(A0)[, 1] 
+A <- as.matrix(A)
+cat("Initial Matrix Dimension:", dim(A), "\n")
+
+
+# ======================== Filter Top 2000 Highest Variance Genes ============================
+cat("Original Gene Count =", nrow(A), "\n")
+
+gene_var <- apply(A, 1, var) 
+top_idx <- order(gene_var, decreasing = TRUE)[1:2000] 
+A <- A[top_idx, ] 
+cat("Filtered Gene Count =", nrow(A), " (Top 2000 Highest Variance)\n")
+write.csv(A, file = "C:/Users/Jilma/Desktop/top2000_high_var_genes.csv",
+             row.names = TRUE)
+
+
+# ======================== t-SNE + kmeans (Gene Clustering) ======================
+# Remove duplicate rows (if any)
+A_genes <- unique(A)
+perplexity <- 50
+tsne_result_gene <- Rtsne(A_genes, perplexity = perplexity)
+
+a_gene <- tsne_result_gene$Y
+
+# Color scheme (high contrast)
+custom_colors <- c(
+    "#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00",
+    "#FFFF33", "#A65628", "#F781BF", "#999999", "#66C2A5", "#FB2"
+)
+
+set.seed(123) # Ensure K-means reproducibility
+km_gene <- kmeans(A_genes, centers = 11)
+kc_gene <- km_gene$cluster # Gene cluster result
+
+tsne_df_gene <- as.data.frame(a_gene)
+tsne_df_gene$cluster <- factor(kc_gene)
+X1_gene <- a_gene[, 1]
+X2_gene <- a_gene[, 2]
+
+# Gene t-SNE Cluster Plot
+gene_tsne_plot <- ggplot(tsne_df_gene, aes(X1_gene, X2_gene, color = cluster)) +
+    geom_point() +
+    scale_color_manual(values = custom_colors) +
+    ggtitle("t-SNE plot for genes with perplexity=50")
+
+# ======================== Multiple Perplexity Comparison (Gene Clustering) ====================
+perplexities <- c(10, 20, 30, 40)
+tsne_results_gene <- list()
+
+set.seed(123) # Ensure results consistency
+for (p in perplexities) {
+    tsne_results_gene[[as.character(p)]] <- Rtsne(A_genes, perplexity = p)
+}
+
+make_tsne_plot <- function(p) {
+    a <- tsne_results_gene[[as.character(p)]]$Y
+    set.seed(123)
+    km <- kmeans(A_genes, centers = 11)
+    kc <- km$cluster
+    
+    tsne_df <- as.data.frame(a)
+    tsne_df$cluster <- factor(kc)
+    X1 <- a[, 1]
+    X2 <- a[, 2]
+    
+    ggplot(tsne_df, aes(X1, X2, color = cluster)) +
+        geom_point() +
+        scale_color_manual(values = custom_colors) +
+        ggtitle(paste("t-SNE plot for perplexity=", p)) +
+        theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+}
+
+p1 <- make_tsne_plot(10)
+p2 <- make_tsne_plot(20)
+p3 <- make_tsne_plot(30)
+p4 <- make_tsne_plot(40)
+
+# Multi-perplexity comparison plot
+multi_perplexity_plot <- grid.arrange(p1, p2, p3, p4, nrow = 2, ncol = 2)
+
+# ======================== limma Analysis (Sample Clustering) ============================
+# Define sample data matrix X_samples (Samples in rows, Genes in columns)
+X_samples <- t(A) 
+tsne_result_sample <- Rtsne(X_samples, dims = 2, perplexity = 10, verbose = TRUE, max_iter = 1000)
+
+set.seed(123) # Ensure clustering reproducibility
+kmeans_result <- kmeans(X_samples, centers = 11)
+clusters <- kmeans_result$cluster # Sample cluster result
+
+library(tibble)
+library(dplyr)
+library(openxlsx) 
+library(tibble)
+
+# ======================== Export Clustered Data (k=11) ============================
+
+# 1. Prepare data frame X_samples (Samples in rows, Genes in columns)
+X_samples_clustered <- as.data.frame(X_samples)
+
+# Convert sample ID (rownames) to a new data column 'Sample'
+X_samples_clustered <- X_samples_clustered %>%
+    rownames_to_column(var = "Sample")
+
+# 2. Append cluster results
+X_samples_clustered$Cluster <- clusters
+
+# 3. Split into 11 subsets and save to Excel
+output_dir <- "C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/" 
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Split data by Cluster column
+cluster_subsets <- split(X_samples_clustered, X_samples_clustered$Cluster)
+
+k_limma <- 11
+for (i in 1:k_limma) { 
+    cluster_name <- paste0("example_cluster", i, ".xlsx") 
+    
+    # Extract current cluster subset
+    df_current <- cluster_subsets[[as.character(i)]]
+    
+    # Remove Cluster and Sample ID columns
+    df_to_save <- df_current %>%
+        dplyr::select(-Cluster) %>% # Remove Cluster column
+        dplyr::select(-Sample)     # Remove Sample ID column
+        
+    write.xlsx(df_to_save, 
+               file = paste0(output_dir, cluster_name), 
+               rowNames = FALSE) 
+    cat("File saved:", cluster_name, "\n")
+}
+# =========================================================================
+# Plot t-SNE cluster map
+tsne_df_sample <- data.frame(
+    X = tsne_result_sample$Y[, 1],
+    Y = tsne_result_sample$Y[, 2],
+    Cluster = factor(clusters)
+)
+
+# Sample t-SNE Cluster Plot
+sample_tsne_plot <- ggplot(tsne_df_sample, aes(x = X, y = Y, color = Cluster)) +
+    geom_point() +
+    ggtitle("t-SNE Plot with Sample Clusters")
+
+# ==========================================================
+# Automated Design Matrix and Differential Expression Analysis (11 clusters)
+# ==========================================================
+k_limma <- 11  # Number of clusters
+cluster_factor <- factor(clusters, labels = paste0("Cluster", 1:k_limma))
+design <- model.matrix(~0 + cluster_factor)
+colnames(design) <- levels(cluster_factor)
+
+# Differential expression model fitting (limma fits rows (genes))
+fit <- lmFit(A, design)
+
+# ==========================================================
+# Automated Contrast Creation (Each Cluster vs. Average of Others)
+# ==========================================================
+contrast_list <- sapply(1:k_limma, function(i) {
+    others <- setdiff(1:k_limma, i)
+    paste0("Cluster", i, " - (", paste0("Cluster", others, collapse = "+"), ")/", length(others))
+})
+
+contrast_matrix <- makeContrasts(contrasts = contrast_list, levels = design)
+
+# ==========================================================
+# eBayes Differential Expression Analysis
+# ==========================================================
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+# ==========================================================
+# Output Top Differential Genes for Each Cluster
+# ==========================================================
+top_genes <- list()
+for (i in 1:k_limma) {
+    cname <- colnames(contrast_matrix)[i]
+    top_genes[[cname]] <- topTable(fit2, coef = cname, number = 10, sort.by = "P")
+    cat("\nTop 10 DE genes for", cname, ":\n")
+    print(top_genes[[cname]][, c("logFC", "P.Value", "adj.P.Val")])
+}
+
+# ==========================================================
+# Summary Statistics (Using Sample Cluster Results)
+# ==========================================================
+g <- nrow(A)
+cat("\nDifferential analysis complete. Genes analyzed =", g, ", Clusters =", k_limma, "\n")
+
+# Calculate Silhouette Coefficient
+sil_sample <- silhouette(clusters, dist(X_samples)) 
+mean_sil_sample <- mean(sil_sample[, 3]) # Mean Silhouette Coefficient
+
+# Silhouette plot visualization
+sil_plot <- fviz_silhouette(sil_sample)
+
+# ==========================================================
+# Clustering Evaluation Metrics: DBI (Lower is Better) & CH (Higher is Better)
+# ==========================================================
+# Davies–Bouldin Index (DBI)
+dbi <- index.DB(x = X_samples, cl = clusters, d = dist(X_samples), centrotypes = "centroids")$DB
+cat("Davies–Bouldin Index (DBI):", round(dbi, 3), "\n")
+
+# Calinski–Harabasz (CH)
+ch <- index.G1(X_samples, clusters)
+cat("Calinski–Harabasz Index (CH):", round(ch, 3), "\n")
+
+
+# ==========================================================
+# Results Saving Module (Text, Plots, Data Tables)
+# ==========================================================
+
+# 1. Define save path and filename prefix
+analysis_type <- "tSNE_k11_Analysis"
+output_save_dir_final <- paste0("C:/Users/Jilma/Desktop/", analysis_type, "_Results/") # New save directory
+
+if (!dir.exists(output_save_dir_final)) {
+    dir.create(output_save_dir_final, recursive = TRUE)
+}
+
+# 2. Capture all console output to a text file (.txt)
+output_log_file <- paste0(output_save_dir_final, analysis_type, "_Log_Output.txt")
+sink(output_log_file) # Start capturing output
+
+# Re-run cat/print statements to be captured
+cat("Initial Matrix Dimension:", dim(A), "\n")
+cat("Original Gene Count =", nrow(A), "\n")
+cat("Filtered Gene Count =", nrow(A), " (Top 2000 Highest Variance)\n")
+
+for (i in 1:k_limma) {  
+    cluster_name <- paste0("example_cluster", i, ".xlsx")  
+    cat("File saved:", cluster_name, "\n")
+}
+
+# Differential expression output
+for (i in 1:k_limma) {
+    cname <- colnames(contrast_matrix)[i]
+    cat("\nTop 10 DE genes for", cname, ":\n")
+    print(top_genes[[cname]][, c("logFC", "P.Value", "adj.P.Val")])
+}
+cat("\nDifferential analysis complete. Genes analyzed =", g, ", Clusters =", k_limma, "\n")
+cat("Mean Silhouette Coefficient:", round(mean_sil_sample, 3), "\n")
+cat("Davies–Bouldin Index (DBI):", round(dbi, 3), "\n")
+cat("Calinski–Harabasz Index (CH):", round(ch, 3), "\n")
+
+
+sink() # Stop capturing output and write content to file
+
+# 3. Save Plots (.png)
+# Gene t-SNE Cluster Plot
+ggsave(filename = paste0(output_save_dir_final, "Gene_tSNE_k11_Plot.png"),
+       plot = gene_tsne_plot, width = 6, height = 6)
+
+# Multi-perplexity Comparison Plot
+ggsave(filename = paste0(output_save_dir_final, "Gene_tSNE_MultiPerplexity_Comparison.png"),
+       plot = multi_perplexity_plot, width = 10, height = 8)
+
+# Sample t-SNE Cluster Plot
+ggsave(filename = paste0(output_save_dir_final, "Sample_tSNE_k11_Plot.png"),
+       plot = sample_tsne_plot, width = 6, height = 6)
+
+# Silhouette Plot
+ggsave(filename = paste0(output_save_dir_final, "Sample_k11_Silhouette_Plot.png"),
+       plot = sil_plot, width = 8, height = 5)
+
+
+# 4. Save Data Frames (.xlsx)
+output_excel_file_final <- paste0(output_save_dir_final, analysis_type, "_Summary_Data.xlsx")
+
+# Prepare list of tables to save
+top_genes_df_list <- list()
+for (i in 1:k_limma) {
+    top_genes_df_list[[paste0("Cluster", i, "_Top10_DEGs")]] <- top_genes[[i]]
+}
+
+data_to_save <- c(
+    top_genes_df_list,
+    list(
+        "Cluster_Metrics" = data.frame(
+            Metric = c("Mean_Silhouette", "DBI", "CH"),
+            Value = c(mean_sil_sample, dbi, ch)
+        )
+    )
+)
+
+write.xlsx(data_to_save, file = output_excel_file_final, overwrite = TRUE)
+
+cat("\nAll results have been saved to the following path:", output_save_dir_final, "\n")
+cat("Console Output (Log):", basename(output_log_file), "\n")
+cat("Data Frame Results (Excel):", basename(output_excel_file_final), "\n")
+```
+
+##supervised tsne
+
+```{r }
+# ===============================================================
+# Optimal Cluster Number Selection + Supervised t-SNE Visualization
+# ===============================================================
+library(Rtsne)
+library(factoextra)
+library(clusterSim)
+library(MASS)
+library(ggplot2)
+library(gridExtra) 
+library(dplyr)   
+library(openxlsx)  
+library(tibble)    
+
+set.seed(123)
+
+# ---------------------- Data Preparation ----------------------
+A0 <- read.table("C:/Users/Jilma/Desktop/TCGA.BRCA.sampleMap_AgilentG4502A_07_3",
+header = TRUE, stringsAsFactors = FALSE)
+
+# Backup original row names/gene names column, and remove unnecessary columns
+gene_names <- A0[, 1]
+A_data <- A0[, -c(1:4)]
+
+# Convert data columns to numeric matrix
+A <- as.matrix(sapply(A_data, as.numeric))
+
+# Find indices of rows containing NA
+na_rows <- which(apply(A, 1, function(x) any(is.na(x))))
+
+# Remove rows with NA
+if (length(na_rows) > 0) {
+    A <- A[-na_rows, ]
+    gene_names <- gene_names[-na_rows]
+}
+
+# Assign row names
+rownames(A) <- gene_names
+
+cat("Processed Gene Count (NA removed) =", nrow(A), "\n")
+
+
+# Filter top 2000 highest variance genes
+gene_var <- apply(A, 1, var)
+top_idx <- order(gene_var, decreasing = TRUE)[1:2000]
+A_top <- A[top_idx, ]
+cat("Filtered Gene Count =", nrow(A_top), "\n")
+
+# Transpose matrix: Samples in rows
+X <- t(A_top)
+cat("Sample Count =", nrow(X), " Features Count =", ncol(X), "\n")
+
+# ---------------------- PCA Dimensionality Reduction ----------------------
+pca_res <- prcomp(X, scale. = TRUE)
+X_pca <- pca_res$x[, 1:50]# Keep the first 50 principal components
+
+# ---------------------- Clustering Optimization ----------------------
+k_range <- 2:12
+dbi_vals <- c()
+ch_vals <- c()
+sil_vals <- c()
+
+for (k in k_range) {
+    km <- kmeans(X_pca, centers = k, nstart = 25)
+    # Convert cluster result to integer for index calculation
+    km_clusters_int <- as.integer(km$cluster) 
+    
+    # Calculate clustering metrics
+    dbi_vals <- c(dbi_vals, index.DB(X_pca, cl = km_clusters_int, d = dist(X_pca))$DB)
+    ch_vals <- c(ch_vals, index.G1(X_pca, km_clusters_int))
+    sil_vals <- c(sil_vals, mean(silhouette(km_clusters_int, dist(X_pca))[, 3]))
+}
+
+# ---------------------- Metric Visualization ----------------------
+df <- data.frame(k = k_range, DBI = dbi_vals, CH = ch_vals, Silhouette = sil_vals)
+
+p1 <- ggplot(df, aes(k, DBI)) + geom_line() + geom_point() +
+    ggtitle("Davies–Bouldin Index (↓)") + theme_minimal()
+
+p2 <- ggplot(df, aes(k, CH)) + geom_line() + geom_point() +
+    ggtitle("Calinski–Harabasz Index (↑)") + theme_minimal()
+
+p3 <- ggplot(df, aes(k, Silhouette)) + geom_line() + geom_point() +
+    ggtitle("Mean Silhouette (↑)") + theme_minimal()
+
+# Combine k optimization plots
+k_opt_plot <- grid.arrange(p1, p2, p3, nrow = 1)
+
+
+# ---------------------- Automatic Optimal k Selection ----------------------
+best_k <- k_range[which.max(ch_vals)] # Use max CH index as optimal K
+cat("Optimal Cluster Number k* =", best_k, "\n")
+
+# ---------------------- Final Clustering Result ----------------------
+km_final <- kmeans(X_pca, centers = best_k, nstart = 25)
+
+# Save cluster result as integer for metric calculation
+clusters_int <- as.integer(km_final$cluster)
+# Save cluster result as factor for ggplot2 plotting
+clusters_factor <- factor(clusters_int)
+
+
+# ==========================================================
+# Cluster Quality Metrics: DBI, CH, Silhouette (Optimal K)
+# ==========================================================
+# Calculate final metric values using optimal clustering result (in X_pca space)
+dbi_final <- index.DB(x = X_pca, cl = clusters_int, d = dist(X_pca), centrotypes = "centroids")$DB
+ch_final <- index.G1(X_pca, clusters_int)
+sil_final <- silhouette(clusters_int, dist(X_pca)) 
+mean_sil_final <- mean(sil_final[, 3])
+
+cat("Davies–Bouldin Index (DBI) for k*:", round(dbi_final, 3), "\n")
+cat("Calinski–Harabasz Index (CH) for k*:", round(ch_final, 3), "\n")
+cat("Mean Silhouette for k*:", round(mean_sil_final, 3), "\n")
+
+# Silhouette plot visualization
+sil_plot <- fviz_silhouette(sil_final)
+
+
+# ==========================================================
+# Export Optimal Cluster Result Files (Pure Numeric Data)
+# ==========================================================
+
+# X is the original sample data (samples in rows, genes in columns)
+X_clustered <- as.data.frame(X)
+
+# Convert sample ID (rownames) to a new data column 'Sample' 
+X_clustered <- X_clustered %>%
+    rownames_to_column(var = "Sample")
+
+# Append cluster result (use factor for splitting and display)
+X_clustered$Cluster <- clusters_factor 
+
+# Export directory
+output_dir <- "C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters2/" 
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# Split data
+cluster_subsets <- split(X_clustered, X_clustered$Cluster)
+
+for (i in 1:best_k) { 
+    cluster_name <- paste0("example_cluster", i, ".xlsx") 
+    
+    # i is the number from 1 to best_k
+    df_current <- cluster_subsets[[as.character(i)]] 
+    
+    # Remove Cluster and Sample ID columns (keep only pure numeric gene expression data)
+    df_to_save <- df_current %>%
+        dplyr::select(-Cluster) %>% 
+        dplyr::select(-Sample)      
+        
+    write.xlsx(df_to_save, 
+               file = paste0(output_dir, cluster_name), 
+               rowNames = FALSE) 
+    cat("File saved:", cluster_name, "\n")
+}
+
+# ---------------------- Supervised t-SNE (LDA-based) ----------------------
+# LDA grouping parameter requires a factor
+lda_model <- lda(X_pca, grouping = clusters_factor)
+X_lda <- predict(lda_model)$x
+
+set.seed(123)
+# Ensure t-SNE input dimension does not exceed N-1
+tsne_input <- X_lda
+# Note: If X_lda has only one column (best_k=2), tsne_input is X_lda
+if (ncol(X_lda) > (nrow(X_lda) - 1)) {
+    tsne_input <- X_pca 
+}
+
+tsne_supervised <- Rtsne(tsne_input, perplexity = 30)
+
+# ---------------------- Plotting ----------------------
+tsne_df <- data.frame(
+    X = tsne_supervised$Y[, 1],
+    Y = tsne_supervised$Y[, 2],
+    Cluster = clusters_factor # Use factor for plotting
+)
+
+# Supervised t-SNE plot
+supervised_tsne_plot <- ggplot(tsne_df, aes(X, Y, color = Cluster)) +
+    geom_point(size = 2, alpha = 0.8) +
+    theme_minimal() +
+    ggtitle(paste0("Supervised t-SNE (LDA-based) for k=", best_k)) +
+    scale_color_brewer(palette = "Set2")
+
+
+# ==========================================================
+# Results Saving Module (Text, Plots, Data Tables)
+# ==========================================================
+
+# 1. Define save path and filename prefix
+analysis_type <- "Supervised_tSNE_MANOVA"
+output_save_dir_final <- paste0("C:/Users/Jilma/Desktop/", analysis_type, "_Results/") 
+
+if (!dir.exists(output_save_dir_final)) {
+    dir.create(output_save_dir_final, recursive = TRUE)
+}
+
+# 2. Capture all console output to a text file (.txt)
+output_log_file <- paste0(output_save_dir_final, analysis_type, "_k", best_k, "_Log_Output.txt")
+sink(output_log_file) # Start capturing output
+
+# Re-run cat/print statements to be captured
+cat("Processed Gene Count (NA removed) =", nrow(A), "\n")
+cat("Filtered Gene Count =", nrow(A_top), "\n")
+cat("Sample Count =", nrow(X), " Features Count =", ncol(X), "\n")
+cat("Optimal Cluster Number k* =", best_k, "\n")
+cat("\n========================================================\n")
+cat("          Clustering Internal Quality Metrics (in X_pca space)\n")
+cat("========================================================\n")
+cat("Davies–Bouldin Index (DBI, ↓):", round(dbi_final, 3), "\n")
+cat("Calinski–Harabasz Index (CH, ↑):", round(ch_final, 3), "\n")
+cat("Mean Silhouette (↑):", round(mean_sil_final, 3), "\n")
+
+# Exported file information
+for (i in 1:best_k) {  
+    cluster_name <- paste0("example_cluster", i, ".xlsx")  
+    cat("File saved:", cluster_name, "\n")
+}
+
+
+sink() # Stop capturing output and write content to file
+
+# 3. Save Plots (.png)
+# Save k optimization plot
+ggsave(filename = paste0(output_save_dir_final, "k_optimization_indices.png"),
+       plot = k_opt_plot, width = 12, height = 4)
+
+# Save Supervised t-SNE plot
+ggsave(filename = paste0(output_save_dir_final, analysis_type, "_k", best_k, "_tSNE_plot.png"),
+       plot = supervised_tsne_plot, width = 6, height = 6)
+
+# Save Silhouette plot
+ggsave(filename = paste0(output_save_dir_final, analysis_type, "_k", best_k, "_Silhouette_plot.png"),
+       plot = sil_plot, width = 8, height = 5)
+
+
+# 4. Save Data Frames (.xlsx)
+output_excel_file_final <- paste0(output_save_dir_final, analysis_type, "_k", best_k, "_Summary_Data.xlsx")
+
+# Prepare list of tables to save
+data_to_save <- list(
+    "k_Optimization_All_Metrics" = df,
+    "Final_Cluster_Metrics" = data.frame(
+        Metric = c("Mean_Silhouette", "DBI", "CH"),
+        Value = c(mean_sil_final, dbi_final, ch_final)
+    ),
+    "LDA_Coordinates" = as.data.frame(X_lda) %>% rownames_to_column(var = "Sample") %>% mutate(Cluster = clusters_factor)
+)
+
+write.xlsx(data_to_save, file = output_excel_file_final, overwrite = TRUE)
+
+cat("\nAll results have been saved to the following path:", output_save_dir_final, "\n")
+cat("Console Output (Log):", basename(output_log_file), "\n")
+cat("Plots (PNG): k_optimization_indices.png, tSNE_plot.png, Silhouette_plot.png\n")
+cat("Data Frame Results (Excel):", basename(output_excel_file_final), "\n")
+```
+
+##tsne manova
+
+```{r}
+library(readxl)
+library(dplyr)
+library(openxlsx)
+
+# ======================== 1. Read 11 Cluster Data Files ============================
+A1 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster1.xlsx")
+A2 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster2.xlsx")
+A3 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster3.xlsx")
+A4 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster4.xlsx")
+A5 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster5.xlsx")
+A6 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster6.xlsx")
+A7 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster7.xlsx")
+A8 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster8.xlsx")
+A9 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster9.xlsx")
+A10 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster10.xlsx")
+A11 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters/example_cluster11.xlsx")
+
+# Convert to matrix
+A1<-as.matrix(A1)
+A2<-as.matrix(A2)
+A3<-as.matrix(A3)
+A4<-as.matrix(A4)
+A5<-as.matrix(A5)
+A6<-as.matrix(A6)
+A7<-as.matrix(A7)
+A8<-as.matrix(A8)
+A9<-as.matrix(A9)
+A10<-as.matrix(A10)
+A11<-as.matrix(A11)
+
+# Combine all data
+X<-rbind(A1,A2,A3,A4,A5,A6,A7,A8,A9,A10,A11)
+
+# ======================== 2. Calculate Dimensions and Sample Counts (k=11) =======================
+d1<-dim(A1)
+d2<-dim(A2)
+d3<-dim(A3)
+d4<-dim(A4)
+d5<-dim(A5)
+d6<-dim(A6)
+d7<-dim(A7)
+d8<-dim(A8)
+d9<-dim(A9)
+d10<-dim(A10)
+d11<-dim(A11)
+
+n1<-d1[1]
+n2<-d2[1]
+n3<-d3[1]
+n4<-d4[1]
+n5<-d5[1]
+n6<-d6[1]
+n7<-d7[1]
+n8<-d8[1]
+n9<-d9[1]
+n10<-d10[1]
+n11<-d11[1]
+
+n_vec <- c(n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11)
+n<-sum(n_vec)
+
+k<-11 # Cluster number
+p<-d1[2] # Feature dimension (gene count)
+
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+
+# ======================== 3. Wilks' Lambda (MANOVA) Test (k=11) =======================
+# Within-group Sum of Squares and Products (SSW)
+SSW<-t(A1)%*%(diag(rep(1,n1))-1/n1*matrix(1,ncol = n1,nrow = n1))%*%A1
++t(A2)%*%(diag(rep(1,n2))-1/n2*matrix(1,ncol = n2,nrow = n2))%*%A2
++t(A3)%*%(diag(rep(1,n3))-1/n3*matrix(1,ncol = n3,nrow = n3))%*%A3
++t(A4)%*%(diag(rep(1,n4))-1/n4*matrix(1,ncol = n4,nrow = n4))%*%A4
++t(A5)%*%(diag(rep(1,n5))-1/n5*matrix(1,ncol = n5,nrow = n5))%*%A5
++t(A6)%*%(diag(rep(1,n6))-1/n6*matrix(1,ncol = n6,nrow = n6))%*%A6
++t(A7)%*%(diag(rep(1,n7))-1/n7*matrix(1,ncol = n7,nrow = n7))%*%A7
++t(A8)%*%(diag(rep(1,n8))-1/n8*matrix(1,ncol = n8,nrow = n8))%*%A8
++t(A9)%*%(diag(rep(1,n9))-1/n9*matrix(1,ncol = n9,nrow = n9))%*%A9
++t(A10)%*%(diag(rep(1,n10))-1/n10*matrix(1,ncol = n10,nrow = n10))%*%A10
++t(A11)%*%(diag(rep(1,n11))-1/n11*matrix(1,ncol = n11,nrow = n11))%*%A11
+
+# Total Sum of Squares and Products (SST)
+SST<-t(X)%*%(diag(rep(1,n))-1/n*matrix(1,ncol = n,nrow = n))%*%X
+
+# Wilks' Lambda statistic
+Ls<-log(det(SSW)/det(SST)) # log(Lambda)
+F5<--(n-1-(p+k)/2)*Ls # Bartlett approximated F5 statistic
+pv5<-pchisq(F5,p*(k-1),lower.tail = FALSE) # Calculate p-value
+
+
+# ======================== 4. Dimensionality Reduction Preprocessing (Hotelling's T^2 type test) ========================
+r_limit<-min(n-1,p)-1
+if (r_limit < 4) {
+    r_limit <- min(n-1,p) 
+}
+r<-r_limit
+
+r1<-max(1, floor(r/4));
+r2<-max(1, floor(r/3));
+r3<-max(1, floor(r/2));
+r4<-max(1, floor(3*r/4));
+
+# Construct Helmert transformation matrix a
+a<-matrix(0,ncol=n-1,nrow = n)
+for (j in 1:(n-1)){
+ a[j+1,j]<--j/sqrt((j+1)*j)
+ for (l in 1:j) {
+  a[l,j]<-1/sqrt((j+1)*j)
+ }
+}
+
+Y<-t(a)%*%X # Centered data Y
+W<-t(Y)%*%Y/(n-1)
+E<-eigen(t(W)%*%W)
+D<-E$vectors
+
+# Ensure columns are within D's actual column count
+Z1<-Y%*%D[,1:min(r1, ncol(D))]
+Z2<-Y%*%D[,1:min(r2, ncol(D))]
+Z3<-Y%*%D[,1:min(r3, ncol(D))]
+Z4<-Y%*%D[,1:min(r4, ncol(D))]
+
+
+# ======================== 5. Hotelling's T^2 Type Test in Reduced Space ========================
+
+# Function to calculate Hotelling F-statistic
+calculate_Hotelling_F <- function(V_matrix, r_dim, n_total) {
+    n_1 <- n_total - 1
+    r <- r_dim
+    u <- matrix(rep(1, n_1), ncol = 1)
+    
+    # G: Covariance of V
+    G <- t(V_matrix) %*% (diag(rep(1, n_1)) - 1/n_1 * matrix(1, ncol = n_1, nrow = n_1)) %*% V_matrix
+    
+    # F statistic (Hotelling's T^2 type)
+    tryCatch({
+        F_stat <- (n_1 - r) / (n_1 * r) * t(u) %*% V_matrix %*% solve(G) %*% t(V_matrix) %*% u
+        pv <- pf(F_stat, r, n_1 - r, lower.tail = FALSE)
+        return(list(F = F_stat[1, 1], pv = pv[1, 1], r = r_dim))
+    }, error = function(e) {
+        # Return NaN if matrix G is singular
+        return(list(F = NaN, pv = NaN, r = r_dim))
+    })
+}
+
+# Test F1, pv1
+res1 <- calculate_Hotelling_F(Z1, r1, n)
+F1 <- res1$F
+pv1 <- res1$pv
+r1_eff <- res1$r
+
+# Test F2, pv2
+res2 <- calculate_Hotelling_F(Z2, r2, n)
+F2 <- res2$F
+pv2 <- res2$pv
+r2_eff <- res2$r
+
+# Test F3, pv3
+res3 <- calculate_Hotelling_F(Z3, r3, n)
+F3 <- res3$F
+pv3 <- res3$pv
+r3_eff <- res3$r
+
+# Test F4, pv4
+res4 <- calculate_Hotelling_F(Z4, r4, n)
+F4 <- res4$F
+pv4 <- res4$pv
+r4_eff <- res4$r
+
+
+# ======================== 6. Results Summary and Output ========================
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=11 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Feature Dimension p =", p, " (Gene Count)\n")
+cat("Cluster Count k =", k, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+
+F_stats <- round(c(F1, F2, F3, F4, F5), 4)
+pv_values <- c(pv1, pv2, pv3, pv4, pv5)
+
+result_df <- data.frame(
+ Test = c(paste0("Hotelling_r", r1_eff), paste0("Hotelling_r", r2_eff),
+   paste0("Hotelling_r", r3_eff), paste0("Hotelling_r", r4_eff), "MANOVA_Wilks"),
+ F_Statistic = F_stats,
+ P_Value = pv_values
+)
+print(result_df)
+
+# Corrected Output
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+# ==========================================================
+# Results Saving Module (Text, Data Tables)
+# ==========================================================
+
+# 1. Define save path
+analysis_type <- "MANOVA_Hotelling_k11"
+output_save_dir_final <- paste0("C:/Users/Jilma/Desktop/", analysis_type, "_Results/") # New save directory
+
+if (!dir.exists(output_save_dir_final)) {
+    dir.create(output_save_dir_final, recursive = TRUE)
+}
+
+# 2. Capture all console output to a text file (.txt)
+output_log_file <- paste0(output_save_dir_final, analysis_type, "_Log_Output.txt")
+sink(output_log_file) # Start capturing output
+
+# Reprint necessary output
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=11 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Feature Dimension p =", p, " (Gene Count)\n")
+cat("Cluster Count k =", k, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+print(result_df)
+
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+sink() # Stop capturing output, write content to file
+
+# 3. Save Data Frames (.xlsx)
+output_excel_file_final <- paste0(output_save_dir_final, analysis_type, "_Summary_Data.xlsx")
+
+data_to_save <- list(
+    "MANOVA_Hotelling_Summary" = result_df,
+    "F_Statistics" = data.frame(Test = result_df$Test, F_Statistic = F_stats),
+    "P_Values" = data.frame(Test = result_df$Test, P_Value = pv_values),
+    "Sample_Counts_per_Cluster" = data.frame(Cluster = 1:k, Sample_Size = n_vec)
+)
+
+write.xlsx(data_to_save, file = output_excel_file_final, overwrite = TRUE)
+
+cat("\nAll results have been saved to the following path:", output_save_dir_final, "\n")
+cat("Console Output (Log):", basename(output_log_file), "\n")
+cat("Data Frame Results (Excel):", basename(output_excel_file_final), "\n")
+```
+
+##supervised tsne manova
+
+```{r}
+library(readxl)
+library(dplyr)
+library(openxlsx)
+
+# ======================== 1. Read 3 Cluster Data Files ============================
+# Ensure example_cluster1.xlsx to example_cluster3.xlsx exist in your path
+A1 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters2/example_cluster1.xlsx")
+A2 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters2/example_cluster2.xlsx")
+A3 <- read_excel("C:/Users/Jilma/Desktop/TCGA_BRCA_Clusters2/example_cluster3.xlsx")
+
+# Convert to numeric matrix
+A1 <- as.matrix(A1)
+A2 <- as.matrix(A2)
+A3 <- as.matrix(A3)
+
+# Combine all data
+X <- rbind(A1, A2, A3)
+
+# ======================== 2. Calculate Dimensions and Sample Counts (k=3) =======================
+d1 <- dim(A1)
+d2 <- dim(A2)
+d3 <- dim(A3)
+
+n1 <- d1[1]
+n2 <- d2[1]
+n3 <- d3[1]
+
+n_vec <- c(n1, n2, n3)
+n <- sum(n_vec)
+
+k <- 3 # Cluster number
+p <- d1[2] # Feature dimension (gene count)
+
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+# ======================== 3. Wilks' Lambda (MANOVA) Test (k=3) =======================
+# Within-group Sum of Squares and Products (SSW)
+# I - 1/ni * J
+I_minus_J1 <- diag(rep(1, n1)) - 1/n1 * matrix(1, ncol = n1, nrow = n1)
+I_minus_J2 <- diag(rep(1, n2)) - 1/n2 * matrix(1, ncol = n2, nrow = n2)
+I_minus_J3 <- diag(rep(1, n3)) - 1/n3 * matrix(1, ncol = n3, nrow = n3)
+
+SSW <- t(A1) %*% I_minus_J1 %*% A1 +
+       t(A2) %*% I_minus_J2 %*% A2 +
+       t(A3) %*% I_minus_J3 %*% A3
+
+# Total Sum of Squares and Products (SST)
+I_minus_J_total <- diag(rep(1, n)) - 1/n * matrix(1, ncol = n, nrow = n)
+SST <- t(X) %*% I_minus_J_total %*% X
+
+# Wilks' Lambda statistic
+Ls <- log(det(SSW) / det(SST)) # log(Lambda)
+F5 <- -(n - 1 - (p + k) / 2) * Ls # Bartlett approximated F5 statistic
+pv5 <- pchisq(F5, p * (k - 1), lower.tail = FALSE) # Calculate p-value
+
+
+# ======================== 4. Dimensionality Reduction Preprocessing (Hotelling's T^2 type test) ========================
+r_limit <- min(n - 1, p) - 1
+if (r_limit < 4) {
+    r_limit <- max(1, min(n - 1, p))
+}
+r <- r_limit
+
+r1 <- max(1, floor(r / 4))
+r2 <- max(1, floor(r / 3))
+r3 <- max(1, floor(r / 2))
+r4 <- max(1, floor(3 * r / 4))
+
+# Construct Helmert transformation matrix a
+a <- matrix(0, ncol = n - 1, nrow = n)
+for (j in 1:(n - 1)) {
+    a[j + 1, j] <- -j / sqrt((j + 1) * j)
+    for (l in 1:j) {
+        a[l, j] <- 1 / sqrt((j + 1) * j)
+    }
+}
+    
+Y <- t(a) %*% X # Centered data Y
+W <- t(Y) %*% Y / (n - 1)
+E <- eigen(t(W) %*% W)
+D <- E$vectors
+
+# Ensure columns are within D's actual column count
+Z1 <- Y %*% D[, 1:min(r1, ncol(D))]
+Z2 <- Y %*% D[, 1:min(r2, ncol(D))]
+Z3 <- Y %*% D[, 1:min(r3, ncol(D))]
+Z4 <- Y %*% D[, 1:min(r4, ncol(D))]
+
+
+# ======================== 5. Hotelling's T^2 Type Test in Reduced Space ========================
+
+# Function to calculate Hotelling F-statistic
+calculate_Hotelling_F <- function(V_matrix, r_dim, n_total) {
+    n_1 <- n_total - 1
+    r <- r_dim
+    u <- matrix(rep(1, n_1), ncol = 1)
+    
+    # G: Covariance of V
+    G <- t(V_matrix) %*% (diag(rep(1, n_1)) - 1/n_1 * matrix(1, ncol = n_1, nrow = n_1)) %*% V_matrix
+    
+    # F statistic (Hotelling's T^2 type)
+    tryCatch({
+        # Check for singularity/determinant near zero before solve
+        if (rcond(G) < 1e-12) {
+            stop("Matrix G is singular or near-singular.")
+        }
+        F_stat <- (n_1 - r) / (n_1 * r) * t(u) %*% V_matrix %*% solve(G) %*% t(V_matrix) %*% u
+        pv <- pf(F_stat, r, n_1 - r, lower.tail = FALSE)
+        return(list(F = F_stat[1, 1], pv = pv[1, 1], r = r_dim))
+    }, error = function(e) {
+        # Return NaN if matrix G is singular
+        return(list(F = NaN, pv = NaN, r = r_dim))
+    })
+}
+
+# Test F1, pv1
+res1 <- calculate_Hotelling_F(Z1, r1, n)
+F1 <- res1$F
+pv1 <- res1$pv
+r1_eff <- res1$r
+
+# Test F2, pv2
+res2 <- calculate_Hotelling_F(Z2, r2, n)
+F2 <- res2$F
+pv2 <- res2$pv
+r2_eff <- res2$r
+
+# Test F3, pv3
+res3 <- calculate_Hotelling_F(Z3, r3, n)
+F3 <- res3$F
+pv3 <- res3$pv
+r3_eff <- res3$r
+
+# Test F4, pv4
+res4 <- calculate_Hotelling_F(Z4, r4, n)
+F4 <- res4$F
+pv4 <- res4$pv
+r4_eff <- res4$r
+
+
+# ======================== 6. Results Summary and Output ========================
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=3 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+
+F_stats <- round(c(F1, F2, F3, F4, F5), 4)
+pv_values <- c(pv1, pv2, pv3, pv4, pv5)
+
+result_df <- data.frame(
+    Test = c(paste0("Hotelling_r", r1_eff), paste0("Hotelling_r", r2_eff), 
+             paste0("Hotelling_r", r3_eff), paste0("Hotelling_r", r4_eff), "MANOVA_Wilks"),
+    F_Statistic = F_stats,
+    P_Value = pv_values
+)
+print(result_df)
+
+# Corrected Output
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+# ==========================================================
+# Results Saving Module (Text, Data Tables)
+# ==========================================================
+
+# 1. Define save path
+analysis_type <- "MANOVA_Hotelling_k3"
+output_save_dir_final <- paste0("C:/Users/Jilma/Desktop/", analysis_type, "_Results/") # New save directory
+
+if (!dir.exists(output_save_dir_final)) {
+    dir.create(output_save_dir_final, recursive = TRUE)
+}
+
+# 2. Capture all console output to a text file (.txt)
+output_log_file <- paste0(output_save_dir_final, analysis_type, "_Log_Output.txt")
+sink(output_log_file) # Start capturing output
+
+# Reprint necessary output
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=3 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+print(result_df)
+
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+sink() # Stop capturing output, write content to file
+
+# 3. Save Data Frames (.xlsx)
+output_excel_file_final <- paste0(output_save_dir_final, analysis_type, "_Summary_Data.xlsx")
+
+data_to_save <- list(
+    "MANOVA_Hotelling_Summary" = result_df,
+    "F_Statistics" = data.frame(Test = result_df$Test, F_Statistic = F_stats),
+    "P_Values" = data.frame(Test = result_df$Test, P_Value = pv_values),
+    "Sample_Counts" = data.frame(Cluster = 1:k, Sample_Size = n_vec)
+)
+
+write.xlsx(data_to_save, file = output_excel_file_final, overwrite = TRUE)
+
+cat("\nAll results have been saved to the following path:", output_save_dir_final, "\n")
+cat("Console Output (Log):", basename(output_log_file), "\n")
+cat("Data Frame Results (Excel):", basename(output_excel_file_final), "\n")
+```
+
+##umap manova
+
+```{r}
+library(readxl)
+library(dplyr)
+library(openxlsx)
+
+# ======================== 1. Read 3 Cluster Data Files ============================
+# Ensure TCGA.BRCA.sampleMap_AgilentG4502A_07_3_cluster1.csv to cluster3.csv exist in your path
+A1 <- read.csv("C:/Users/Jilma/Desktop/umap/UMAP_HPO_Results/Individual_Clusters_Data/TCGA.BRCA.sampleMap_AgilentG4502A_07_3_cluster1.csv")
+A2 <- read.csv("C:/Users/Jilma/Desktop/umap/UMAP_HPO_Results/Individual_Clusters_Data/TCGA.BRCA.sampleMap_AgilentG4502A_07_3_cluster2.csv")
+A3 <- read.csv("C:/Users/Jilma/Desktop/umap/UMAP_HPO_Results/Individual_Clusters_Data/TCGA.BRCA.sampleMap_AgilentG4502A_07_3_cluster3.csv")
+
+# Convert to numeric matrix
+A1 <- as.matrix(A1)
+A2 <- as.matrix(A2)
+A3 <- as.matrix(A3)
+
+# Combine all data
+X <- rbind(A1, A2, A3)
+
+# ======================== 2. Calculate Dimensions and Sample Counts (k=3) =======================
+d1 <- dim(A1)
+d2 <- dim(A2)
+d3 <- dim(A3)
+
+n1 <- d1[1]
+n2 <- d2[1]
+n3 <- d3[1]
+
+n_vec <- c(n1, n2, n3)
+n <- sum(n_vec)
+
+k <- 3 # Cluster number
+p <- d1[2] # Feature dimension (gene count)
+
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+# ======================== 3. Wilks' Lambda (MANOVA) Test (k=3) =======================
+# Within-group Sum of Squares and Products (SSW)
+I_minus_J1 <- diag(rep(1, n1)) - 1/n1 * matrix(1, ncol = n1, nrow = n1)
+I_minus_J2 <- diag(rep(1, n2)) - 1/n2 * matrix(1, ncol = n2, nrow = n2)
+I_minus_J3 <- diag(rep(1, n3)) - 1/n3 * matrix(1, ncol = n3, nrow = n3)
+
+SSW <- t(A1) %*% I_minus_J1 %*% A1 +
+       t(A2) %*% I_minus_J2 %*% A2 +
+       t(A3) %*% I_minus_J3 %*% A3
+
+# Total Sum of Squares and Products (SST)
+I_minus_J_total <- diag(rep(1, n)) - 1/n * matrix(1, ncol = n, nrow = n)
+SST <- t(X) %*% I_minus_J_total %*% X
+
+# Wilks' Lambda statistic
+# Handle cases where determinants might be zero
+if (det(SSW) > 0 && det(SST) > 0) {
+    Ls <- log(det(SSW) / det(SST)) # log(Lambda)
+    F5 <- -(n - 1 - (p + k) / 2) * Ls # Bartlett approximated F5 statistic
+    pv5 <- pchisq(F5, p * (k - 1), lower.tail = FALSE) # Calculate p-value
+} else {
+    Ls <- NA
+    F5 <- NaN
+    pv5 <- NaN
+}
+
+
+# ======================== 4. Dimensionality Reduction Preprocessing (Hotelling's T^2 type test) ========================
+r_limit <- min(n - 1, p) - 1
+if (r_limit < 4) {
+    r_limit <- max(1, min(n - 1, p)) # Ensure r_limit is at least 1
+}
+r <- r_limit
+
+r1 <- max(1, floor(r / 4))
+r2 <- max(1, floor(r / 3))
+r3 <- max(1, floor(r / 2))
+r4 <- max(1, floor(3 * r / 4))
+
+# Construct Helmert transformation matrix a
+a <- matrix(0, ncol = n - 1, nrow = n)
+for (j in 1:(n - 1)) {
+    a[j + 1, j] <- -j / sqrt((j + 1) * j)
+    for (l in 1:j) {
+        a[l, j] <- 1 / sqrt((j + 1) * j)
+    }
+}
+    
+Y <- t(a) %*% X # Centered data Y
+W <- t(Y) %*% Y / (n - 1)
+E <- eigen(t(W) %*% W)
+D <- E$vectors
+
+# Ensure columns are within D's actual column count
+Z1 <- Y %*% D[, 1:min(r1, ncol(D))]
+Z2 <- Y %*% D[, 1:min(r2, ncol(D))]
+Z3 <- Y %*% D[, 1:min(r3, ncol(D))]
+Z4 <- Y %*% D[, 1:min(r4, ncol(D))]
+
+
+# ======================== 5. Hotelling's T^2 Type Test in Reduced Space ========================
+
+# Function to calculate Hotelling F-statistic
+calculate_Hotelling_F <- function(V_matrix, r_dim, n_total) {
+    n_1 <- n_total - 1
+    r <- r_dim
+    u <- matrix(rep(1, n_1), ncol = 1)
+    
+    # G: Covariance of V
+    G <- t(V_matrix) %*% (diag(rep(1, n_1)) - 1/n_1 * matrix(1, ncol = n_1, nrow = n_1)) %*% V_matrix
+    
+    # F statistic (Hotelling's T^2 type)
+    tryCatch({
+        # Check for singularity/determinant near zero before solve
+        if (rcond(G) < 1e-12) {
+            stop("Matrix G is singular or near-singular.")
+        }
+        F_stat <- (n_1 - r) / (n_1 * r) * t(u) %*% V_matrix %*% solve(G) %*% t(V_matrix) %*% u
+        pv <- pf(F_stat, r, n_1 - r, lower.tail = FALSE)
+        return(list(F = F_stat[1, 1], pv = pv[1, 1], r = r_dim))
+    }, error = function(e) {
+        # Return NaN if matrix G is singular
+        return(list(F = NaN, pv = NaN, r = r_dim))
+    })
+}
+
+# Test F1, pv1
+res1 <- calculate_Hotelling_F(Z1, r1, n)
+F1 <- res1$F
+pv1 <- res1$pv
+r1_eff <- res1$r
+
+# Test F2, pv2
+res2 <- calculate_Hotelling_F(Z2, r2, n)
+F2 <- res2$F
+pv2 <- res2$pv
+r2_eff <- res2$r
+
+# Test F3, pv3
+res3 <- calculate_Hotelling_F(Z3, r3, n)
+F3 <- res3$F
+pv3 <- res3$pv
+r3_eff <- res3$r
+
+# Test F4, pv4
+res4 <- calculate_Hotelling_F(Z4, r4, n)
+F4 <- res4$F
+pv4 <- res4$pv
+r4_eff <- res4$r
+
+
+# ======================== 6. Results Summary and Output ========================
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=3 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Feature Dimension p =", p, " (Gene Count)\n")
+cat("Cluster Count k =", k, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+
+F_stats <- round(c(F1, F2, F3, F4, F5), 4)
+pv_values <- c(pv1, pv2, pv3, pv4, pv5)
+
+result_df <- data.frame(
+    Test = c(paste0("Hotelling_r", r1_eff), paste0("Hotelling_r", r2_eff), 
+             paste0("Hotelling_r", r3_eff), paste0("Hotelling_r", r4_eff), "MANOVA_Wilks"),
+    F_Statistic = F_stats,
+    P_Value = pv_values
+)
+print(result_df)
+
+# Corrected Output
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+# ==========================================================
+# Results Saving Module (Text, Data Tables)
+# ==========================================================
+
+# 1. Define save path
+analysis_type <- "MANOVA_Hotelling_k3_UMAP"
+output_save_dir_final <- paste0("C:/Users/Jilma/Desktop/", analysis_type, "_Results/") # New save directory
+
+if (!dir.exists(output_save_dir_final)) {
+    dir.create(output_save_dir_final, recursive = TRUE)
+}
+
+# 2. Capture all console output to a text file (.txt)
+output_log_file <- paste0(output_save_dir_final, analysis_type, "_Log_Output.txt")
+sink(output_log_file) # Start capturing output
+
+# Reprint necessary output
+cat("Total Sample Count n =", n, "\n")
+cat("Cluster Count k =", k, "\n")
+cat("Feature Dimension p =", p, "\n")
+
+cat("\n========================================================\n")
+cat("       MANOVA and Reduced Hotelling's T^2 Test for K=3 Clustering\n")
+cat("========================================================\n")
+cat("Total Sample Count n =", n, "\n")
+cat("Feature Dimension p =", p, " (Gene Count)\n")
+cat("Cluster Count k =", k, "\n")
+cat("Wilks' Lambda F5 Approx. Degrees of Freedom =", p * (k - 1), "\n")
+cat("Reduced Subspace Dimensions r1-r4:", r1_eff, r2_eff, r3_eff, r4_eff, "\n")
+cat("--------------------------------------------------------\n")
+print(result_df)
+
+cat("\nF Statistics (F_stats):\n")
+print(F_stats)
+
+cat("\nP-values (pv_values):\n")
+print(pv_values)
+
+
+sink() # Stop capturing output, write content to file
+
+# 3. Save Data Frames (.xlsx)
+output_excel_file_final <- paste0(output_save_dir_final, analysis_type, "_Summary_Data.xlsx")
+
+data_to_save <- list(
+    "MANOVA_Hotelling_Summary" = result_df,
+    "F_Statistics" = data.frame(Test = result_df$Test, F_Statistic = F_stats),
+    "P_Values" = data.frame(Test = result_df$Test, P_Value = pv_values),
+    "Sample_Counts_per_Cluster" = data.frame(Cluster = 1:k, Sample_Size = n_vec)
+)
+
+write.xlsx(data_to_save, file = output_excel_file_final, overwrite = TRUE)
+
+cat("\nAll results have been saved to the following path:", output_save_dir_final, "\n")
+cat("Console Output (Log):", basename(output_log_file), "\n")
+cat("Data Frame Results (Excel):", basename(output_excel_file_final), "\n")
+```
+comparison3
+```{r}
+library(ggplot2)
+library(dplyr)
+library(openxlsx)
+library(gridExtra)
+
+# 1. Prepare Data
+metrics_data <- data.frame(
+  Method = factor(c("t-SNE", "t-SNE (Supervised)", "UMAP"),
+                  levels = c("t-SNE", "t-SNE (Supervised)", "UMAP")),
+  DBI = c(3.534, 1.491, 1.255),
+  CH = c(29.033, 135.585, 151.561),
+  Silhouette = c(0.056, 0.244, 0.167)
+)
+
+# 2. Define Output Path
+output_dir <- "C:/Users/Jilma/Desktop/Cluster_Comparison_Results/"
+if (!dir.exists(output_dir)) {
+    dir.create(output_dir)
+}
+
+# 3. Create DBI Comparison Plot (Lower is Better)
+dbi_plot <- ggplot(metrics_data, aes(x = Method, y = DBI, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = round(DBI, 3)), vjust = -0.5, size = 4) +
+  labs(title = "Davies–Bouldin Index (DBI, Lower is Better)",
+       x = "Clustering Method",
+       y = "DBI Score") +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 15, hjust = 1))
+
+# 4. Create CH Comparison Plot (Higher is Better)
+ch_plot <- ggplot(metrics_data, aes(x = Method, y = CH, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = round(CH, 3)), vjust = -0.5, size = 4) +
+  labs(title = "Calinski–Harabasz Index (CH, Higher is Better)",
+       x = "Clustering Method",
+       y = "CH Score") +
+  scale_fill_manual(values = c("t-SNE" = "#F8766D", "t-SNE (Supervised)" = "#00BFC4", "UMAP" = "#7CAE00")) +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 15, hjust = 1))
+
+# 5. Create Silhouette Comparison Plot (Higher is Better)
+sil_plot <- ggplot(metrics_data, aes(x = Method, y = Silhouette, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.8) +
+  geom_text(aes(label = round(Silhouette, 3)), vjust = -0.5, size = 4) +
+  labs(title = "Mean Silhouette Score (Sil, Higher is Better)",
+       x = "Clustering Method",
+       y = "Silhouette Score") +
+  scale_fill_manual(values = c("t-SNE" = "#F8766D", "t-SNE (Supervised)" = "#00BFC4", "UMAP" = "#7CAE00")) +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text.x = element_text(angle = 15, hjust = 1)) +
+  ylim(0, max(metrics_data$Silhouette) * 1.2) # Set Y axis range to accommodate labels
+
+# 6. Combine Plots and Save
+comparison_plot <- grid.arrange(dbi_plot, ch_plot, sil_plot, ncol = 3)
+ggsave(filename = paste0(output_dir, "Cluster_Metric_Comparison.png"),
+       plot = comparison_plot, 
+       width = 15, 
+       height = 5, 
+       dpi = 300)
+
+# 7. Export Raw Data Table to Excel
+write.xlsx(metrics_data, file = paste0(output_dir, "Cluster_Metrics_Summary.xlsx"), rowNames = FALSE)
+
+cat("\nCluster metric comparison successfully saved.\n")
+cat("Plot saved to:", paste0(output_dir, "Cluster_Metric_Comparison.png"), "\n")
+cat("Data table saved to:", paste0(output_dir, "Cluster_Metrics_Summary.xlsx"), "\n")
+```
+comparison manova
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+
+# ======================== 1. Manually Input MANOVA/Hotelling's P-Value Data ============================
+
+# Hotelling's T^2 (P-Value for r4 dimension)
+p_tsne_k11 <- 1.520552e-16
+p_sup_tsne_k3 <- 2.489493e-40
+p_umap_k3 <- 4.464990e-11
+
+# Clustering Method Information
+comparison_data <- data.frame(
+    Cluster_Method = c("K=11 (T-SNE)", "K=3 (Supervised t-SNE)", "K=3 (UMAP)"),
+    P_Value = c(p_tsne_k11, p_sup_tsne_k3, p_umap_k3)
+)
+
+# ======================== 2. Data Processing: Calculate Significance Metric ============================
+
+# Calculate -log10(P Value) for visualization
+comparison_data <- comparison_data %>%
+    mutate(
+        NegLogP = -log10(P_Value),
+        # Create P_Label for display on the chart
+        P_Label = paste0("P=", format(P_Value, digits = 2, scientific = TRUE))
+    )
+
+# ======================== 3. Visualize MANOVA Significance Comparison ============================
+
+# Define output path
+output_save_dir <- "C:/Users/Jilma/Desktop/MANOVA_Comparison_Results/"
+if (!dir.exists(output_save_dir)) {
+    dir.create(output_save_dir)
+}
+output_file <- paste0(output_save_dir, "Hotelling_T2_PValue_Comparison_EN.png")
+
+
+manova_plot <- ggplot(comparison_data, aes(x = Cluster_Method, y = NegLogP, fill = Cluster_Method)) +
+    geom_bar(stat = "identity", width = 0.6) +
+    # Add P-value labels
+    geom_text(aes(label = P_Label),
+              vjust = -0.5, size = 4, fontface = "bold") +
+    labs(
+        title = "Hotelling's T² Test Significance Comparison (r4 Dimension)",
+        subtitle = "Lower P-value results in higher -log₁₀(P), indicating greater inter-group separation.",
+        x = "Clustering Method",
+        y = expression(-log[10](P~Value))
+    ) +
+    theme_minimal(base_size = 14) +
+    scale_fill_manual(values = c("K=11 (T-SNE)" = "#1f78b4", "K=3 (Supervised t-SNE)" = "#e31a1c", "K=3 (UMAP)" = "#33a02c")) +
+    theme(
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.title.x = element_blank(), 
+        panel.grid.major.x = element_blank()
+    )
+
+print(manova_plot)
+
+
+# ======================== 4. Conclusion Output and Saving ============================
+
+ggsave(filename = output_file, plot = manova_plot, width = 8, height = 5)
+
+cat("\n========================================================\n")
+cat("            Significance Comparison Conclusion\n")
+cat("========================================================\n")
+cat("Significance Ranking based on Hotelling's T² Test (r4 Dimension P-value):\n")
+cat("\n")
+cat(sprintf("1. K=3 (Supervised t-SNE): P = %.2e\n", p_sup_tsne_k3))
+cat(sprintf("2. K=11 (T-SNE):           P = %.2e\n", p_tsne_k11))
+cat(sprintf("3. K=3 (UMAP):             P = %.2e\n", p_umap_k3))
+cat("\n")
+cat("Best Performing Method: The **Supervised t-SNE K=3** method has the lowest P-value (2.49e-40), indicating the **most statistically significant separation** between its clusters.\n")
+cat(paste0("Comparison chart saved to: ", output_file, "\n"))
+cat("========================================================\n")
+```

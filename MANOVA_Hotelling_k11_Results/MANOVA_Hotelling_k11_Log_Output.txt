@@ -1,0 +1,19 @@
+Total Sample Count n = 594 
+Cluster Count k = 11 
+Feature Dimension p = 2000 
+
+========================================================
+       MANOVA and Reduced Hotelling's T^2 Test for K=11 Clustering
+========================================================
+Total Sample Count n = 594 
+Feature Dimension p = 2000  (Gene Count)
+Cluster Count k = 11 
+Wilks' Lambda F5 Approx. Degrees of Freedom = 20000 
+Reduced Subspace Dimensions r1-r4: 148 197 296 444 
+--------------------------------------------------------
+
+F Statistics (F_stats):
+[1] 4.4789 3.9565 3.7515 3.4248    NaN
+
+P-values (pv_values):
+[1] 1.449197e-34 1.769451e-31 1.914515e-28 1.520552e-16          NaN
